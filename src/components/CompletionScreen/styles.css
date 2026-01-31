@@ -25,7 +25,10 @@
   gap: 24px;
   max-width: 500px;
   padding: 40px;
+  padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
   text-align: center;
+  max-height: 100vh;
+  overflow-y: auto;
 }
 
 .completion-emoji {

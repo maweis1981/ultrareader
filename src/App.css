@@ -29,6 +29,7 @@ body {
   width: 100%;
   max-width: 800px;
   padding: 20px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
 }
 
 .app {
