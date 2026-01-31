@@ -39,6 +39,7 @@ function App() {
   const {
     isRecording,
     recordedBlob,
+    recordedMimeType,
     startRecording,
     stopRecording,
     recordFrame,
@@ -258,6 +259,7 @@ function App() {
           wpm={completionData.wpm}
           stats={stats}
           recordedBlob={recordedBlob}
+          recordedMimeType={recordedMimeType}
           onContinue={handleContinue}
           onReplay={handleReplay}
         />

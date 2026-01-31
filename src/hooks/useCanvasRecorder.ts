@@ -29,10 +29,33 @@ const DEFAULT_CONFIG: CanvasRecorderConfig = {
 interface UseCanvasRecorderReturn {
   isRecording: boolean;
   recordedBlob: Blob | null;
+  recordedMimeType: string | null;
   startRecording: () => void;
   stopRecording: () => Promise<void>;
   recordFrame: (token: Token | null, wpm: number, progress: number) => void;
   clearRecording: () => void;
+}
+
+// Get the best supported mime type, preferring MP4
+function getBestMimeType(): string | null {
+  // Safari only supports MP4, Chrome/Firefox support WebM
+  // Prefer MP4 for best compatibility
+  const mimeTypes = [
+    'video/mp4;codecs=avc1.42E01E', // H.264 Baseline (Safari, Chrome 120+)
+    'video/mp4;codecs=avc1',
+    'video/mp4',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+
+  for (const mimeType of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(mimeType)) {
+      return mimeType;
+    }
+  }
+
+  return null; // No supported format
 }
 
 export function useCanvasRecorder(
@@ -40,6 +63,7 @@ export function useCanvasRecorder(
 ): UseCanvasRecorderReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedMimeType, setRecordedMimeType] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -154,19 +178,29 @@ export function useCanvasRecorder(
 
   // Start recording
   const startRecording = useCallback(() => {
+    // Check if MediaRecorder is supported
+    if (typeof MediaRecorder === 'undefined') {
+      console.error('MediaRecorder not supported in this browser');
+      return;
+    }
+
     const canvas = initCanvas();
     if (!canvas) return;
 
     chunksRef.current = [];
     setRecordedBlob(null);
+    setRecordedMimeType(null);
 
     // Create stream from canvas
     const stream = canvas.captureStream(configRef.current.fps);
 
-    // Create MediaRecorder
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
+    // Get best supported mime type (prefer MP4 for Safari compatibility)
+    const mimeType = getBestMimeType();
+    if (!mimeType) {
+      console.error('No supported video format found');
+      return;
+    }
+    console.log('Recording with mime type:', mimeType);
 
     const mediaRecorder = new MediaRecorder(stream, {
       mimeType,
@@ -203,6 +237,7 @@ export function useCanvasRecorder(
         const mimeType = mediaRecorder.mimeType;
         const blob = new Blob(chunksRef.current, { type: mimeType });
         setRecordedBlob(blob);
+        setRecordedMimeType(mimeType);
         setIsRecording(false);
 
         // Cleanup
@@ -220,12 +255,14 @@ export function useCanvasRecorder(
   // Clear recording
   const clearRecording = useCallback(() => {
     setRecordedBlob(null);
+    setRecordedMimeType(null);
     chunksRef.current = [];
   }, []);
 
   return {
     isRecording,
     recordedBlob,
+    recordedMimeType,
     startRecording,
     stopRecording,
     recordFrame,
