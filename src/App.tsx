@@ -1,11 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRSVPPlayer } from './hooks/useRSVPPlayer';
+import { useScreenRecorder } from './hooks/useScreenRecorder';
 import { RSVPDisplay } from './components/RSVPDisplay';
 import { TextInput } from './components/TextInput';
 import { Controls } from './components/Controls';
 import { HUD } from './components/HUD';
 import { ArticleSelector } from './components/ArticleSelector';
 import { StatsPanel } from './components/StatsPanel';
+import { CompletionScreen } from './components/CompletionScreen';
 import type { Article } from './data/articles';
 import { DIFFICULTY_WPM } from './data/articles';
 import type { UserStats } from './data/stats';
@@ -34,10 +36,25 @@ function App() {
     setProgressiveMode,
   } = useRSVPPlayer();
 
+  const {
+    isRecording,
+    recordedBlob,
+    startRecording,
+    stopRecording,
+    clearRecording,
+  } = useScreenRecorder();
+
   const [view, setView] = useState<AppView>('home');
   const [currentArticle, setCurrentArticle] = useState<Article | null>(null);
   const [stats, setStats] = useState<UserStats>(() => loadStats());
   const [showStats, setShowStats] = useState(false);
+  const [showCompletion, setShowCompletion] = useState(false);
+  const [completionData, setCompletionData] = useState<{
+    wordCount: number;
+    readTime: number;
+    wpm: number;
+  } | null>(null);
+
   const startTimeRef = useRef<number>(0);
   const wordCountRef = useRef<number>(0);
 
@@ -57,18 +74,35 @@ function App() {
   const handleReadingComplete = useCallback(() => {
     if (startTimeRef.current > 0 && wordCountRef.current > 0) {
       const readTime = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const finalWpm = progressiveMode.enabled ? effectiveWpm : wpm;
+
+      // Save completion data for the completion screen
+      setCompletionData({
+        wordCount: wordCountRef.current,
+        readTime,
+        wpm: finalWpm,
+      });
+
       const newStats = recordReading(
         stats,
         currentArticle?.id || null,
         wordCountRef.current,
-        wpm,
+        finalWpm,
         readTime,
         currentArticle?.difficulty
       );
       setStats(newStats);
+
+      // Stop recording if active
+      if (isRecording) {
+        stopRecording();
+      }
+
+      // Show completion screen
+      setShowCompletion(true);
     }
     startTimeRef.current = 0;
-  }, [stats, currentArticle, wpm]);
+  }, [stats, currentArticle, wpm, effectiveWpm, progressiveMode.enabled, isRecording, stopRecording]);
 
   // Watch for finished status
   useEffect(() => {
@@ -84,6 +118,8 @@ function App() {
     loadText(article.content);
     wordCountRef.current = article.wordCount;
     startTimeRef.current = 0;
+    setShowCompletion(false);
+    clearRecording();
     setView('reading');
   };
 
@@ -91,21 +127,50 @@ function App() {
   const handleCustomText = (text: string) => {
     setCurrentArticle(null);
     loadText(text);
-    // Estimate word count
     wordCountRef.current = text.split(/\s+/).filter(w => w.length > 0).length;
     startTimeRef.current = 0;
+    setShowCompletion(false);
+    clearRecording();
     setView('reading');
   };
 
   // Handle back to home
   const handleBackToHome = useCallback(() => {
     if (status === 'playing' || status === 'paused') {
-      handleReadingComplete();
+      // Don't show completion screen when manually going back
+      startTimeRef.current = 0;
+    }
+    if (isRecording) {
+      stopRecording();
     }
     reset();
     setCurrentArticle(null);
+    setShowCompletion(false);
+    clearRecording();
     setView('home');
-  }, [status, handleReadingComplete, reset]);
+  }, [status, reset, isRecording, stopRecording, clearRecording]);
+
+  // Handle replay from completion screen
+  const handleReplay = useCallback(() => {
+    setShowCompletion(false);
+    clearRecording();
+    reset();
+    startTimeRef.current = 0;
+  }, [reset, clearRecording]);
+
+  // Handle continue from completion screen
+  const handleContinue = useCallback(() => {
+    setShowCompletion(false);
+    clearRecording();
+    reset();
+    setCurrentArticle(null);
+    setView('home');
+  }, [reset, clearRecording]);
+
+  // Handle start recording
+  const handleStartRecording = async () => {
+    await startRecording();
+  };
 
   // 键盘快捷键
   useEffect(() => {
@@ -114,6 +179,9 @@ function App() {
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) {
         return;
       }
+
+      // Don't handle shortcuts when completion screen is shown
+      if (showCompletion) return;
 
       // Only handle shortcuts in reading view
       if (view !== 'reading') return;
@@ -155,10 +223,32 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [view, togglePlay, seekRelative, adjustWpm, reset, handleBackToHome]);
+  }, [view, showCompletion, togglePlay, seekRelative, adjustWpm, reset, handleBackToHome]);
 
   return (
     <div className="app">
+      {/* Recording indicator */}
+      {isRecording && (
+        <div className="recording-indicator">
+          <div className="recording-dot" />
+          <span className="recording-text">Recording</span>
+        </div>
+      )}
+
+      {/* Completion Screen */}
+      {showCompletion && completionData && (
+        <CompletionScreen
+          article={currentArticle}
+          wordCount={completionData.wordCount}
+          readTime={completionData.readTime}
+          wpm={completionData.wpm}
+          stats={stats}
+          recordedBlob={recordedBlob}
+          onContinue={handleContinue}
+          onReplay={handleReplay}
+        />
+      )}
+
       <header className="app-header">
         <h1 onClick={() => view !== 'home' && handleBackToHome()} style={{ cursor: view !== 'home' ? 'pointer' : 'default' }}>
           UltraReader
@@ -230,14 +320,28 @@ function App() {
               onSetProgressiveMode={setProgressiveMode}
             />
 
-            <button className="new-text-btn" onClick={handleBackToHome}>
-              Back to Articles
-            </button>
+            <div className="reading-actions">
+              {!isRecording && status !== 'finished' && (
+                <button className="record-btn" onClick={handleStartRecording}>
+                  <span className="btn-icon">🎬</span>
+                  Record Session
+                </button>
+              )}
+              {isRecording && (
+                <button className="record-btn recording" onClick={stopRecording}>
+                  <span className="btn-icon">⏹</span>
+                  Stop Recording
+                </button>
+              )}
+              <button className="new-text-btn" onClick={handleBackToHome}>
+                Back to Articles
+              </button>
+            </div>
           </>
         )}
       </main>
 
-      {view === 'reading' && (
+      {view === 'reading' && !showCompletion && (
         <footer className="app-footer">
           <div className="shortcuts">
             <span><kbd>Space</kbd> Play/Pause</span>
