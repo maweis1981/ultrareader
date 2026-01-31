@@ -1,5 +1,5 @@
 import { useReducer, useRef, useCallback, useEffect } from 'react';
-import type { Token, PlayerState, PlayerAction, PlayerStatus } from '../types';
+import type { PlayerState, PlayerAction, PlayerStatus } from '../types';
 import { tokenize } from '../core/tokenizer';
 import { calculateDelay } from '../core/timing';
 
