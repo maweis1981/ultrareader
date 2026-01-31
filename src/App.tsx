@@ -40,6 +40,8 @@ function App() {
     isRecording,
     recordedBlob,
     recordedMimeType,
+    orientation,
+    setOrientation,
     startRecording,
     stopRecording,
     recordFrame,
@@ -76,9 +78,13 @@ function App() {
   useEffect(() => {
     if (isRecording && status === 'playing') {
       const currentWpm = progressiveMode.enabled ? effectiveWpm : wpm;
-      recordFrame(currentToken, currentWpm, progress);
+      recordFrame(currentToken, currentWpm, progress, {
+        articleTitle: currentArticle?.title,
+        currentIndex,
+        totalTokens,
+      });
     }
-  }, [isRecording, status, currentToken, wpm, effectiveWpm, progressiveMode.enabled, progress, recordFrame]);
+  }, [isRecording, status, currentToken, wpm, effectiveWpm, progressiveMode.enabled, progress, recordFrame, currentArticle, currentIndex, totalTokens]);
 
   // Record reading when finished
   const handleReadingComplete = useCallback(async () => {
@@ -179,7 +185,16 @@ function App() {
 
   // Handle start recording - now just starts, no permission needed
   const handleStartRecording = () => {
-    startRecording();
+    startRecording({
+      articleTitle: currentArticle?.title,
+      currentIndex,
+      totalTokens,
+    });
+  };
+
+  // Toggle video orientation
+  const handleToggleOrientation = () => {
+    setOrientation(orientation === 'landscape' ? 'portrait' : 'landscape');
   };
 
   // Handle stop recording
@@ -338,10 +353,20 @@ function App() {
 
             <div className="reading-actions">
               {!isRecording && status !== 'finished' && (
-                <button className="record-btn" onClick={handleStartRecording}>
-                  <span className="btn-icon">🎬</span>
-                  Record Session
-                </button>
+                <div className="record-controls">
+                  <button
+                    className="orientation-btn"
+                    onClick={handleToggleOrientation}
+                    title={orientation === 'landscape' ? 'Switch to Portrait (9:16)' : 'Switch to Landscape (16:9)'}
+                  >
+                    {orientation === 'landscape' ? '📺' : '📱'}
+                    {orientation === 'landscape' ? '16:9' : '9:16'}
+                  </button>
+                  <button className="record-btn" onClick={handleStartRecording}>
+                    <span className="btn-icon">🎬</span>
+                    Record
+                  </button>
+                </div>
               )}
               {isRecording && (
                 <button className="record-btn recording" onClick={handleStopRecording}>

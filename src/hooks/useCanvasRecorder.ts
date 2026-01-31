@@ -2,37 +2,49 @@ import { useRef, useState, useCallback } from 'react';
 import type { Token } from '../types';
 import { splitByORP } from '../core/orp';
 
+export type VideoOrientation = 'landscape' | 'portrait';
+
 interface CanvasRecorderConfig {
-  width: number;
-  height: number;
+  orientation: VideoOrientation;
   fps: number;
   backgroundColor: string;
   textColor: string;
   pivotColor: string;
   fontFamily: string;
-  fontSize: number;
   showWatermark: boolean;
 }
 
+// Video dimensions based on orientation
+const DIMENSIONS = {
+  landscape: { width: 1280, height: 720 },  // 16:9
+  portrait: { width: 720, height: 1280 },   // 9:16 (for TikTok/Reels/Shorts)
+};
+
 const DEFAULT_CONFIG: CanvasRecorderConfig = {
-  width: 1280,
-  height: 720,
+  orientation: 'landscape',
   fps: 30,
   backgroundColor: '#0a0a0a',
   textColor: '#ffffff',
   pivotColor: '#ff0000',
   fontFamily: 'Courier New, monospace',
-  fontSize: 72,
   showWatermark: true,
 };
+
+interface RecordingContext {
+  articleTitle?: string;
+  currentIndex: number;
+  totalTokens: number;
+}
 
 interface UseCanvasRecorderReturn {
   isRecording: boolean;
   recordedBlob: Blob | null;
   recordedMimeType: string | null;
-  startRecording: () => void;
+  orientation: VideoOrientation;
+  setOrientation: (orientation: VideoOrientation) => void;
+  startRecording: (context?: Partial<RecordingContext>) => void;
   stopRecording: () => Promise<void>;
-  recordFrame: (token: Token | null, wpm: number, progress: number) => void;
+  recordFrame: (token: Token | null, wpm: number, progress: number, context?: Partial<RecordingContext>) => void;
   clearRecording: () => void;
 }
 
@@ -64,67 +76,90 @@ export function useCanvasRecorder(
   const [isRecording, setIsRecording] = useState(false);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordedMimeType, setRecordedMimeType] = useState<string | null>(null);
+  const [orientation, setOrientation] = useState<VideoOrientation>(config.orientation || 'landscape');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const configRef = useRef<CanvasRecorderConfig>({ ...DEFAULT_CONFIG, ...config });
+  const contextRef = useRef<RecordingContext>({ currentIndex: 0, totalTokens: 0 });
 
-  // Initialize canvas
+  // Initialize canvas with current orientation
   const initCanvas = useCallback(() => {
-    const cfg = configRef.current;
+    const dims = DIMENSIONS[orientation];
     const canvas = document.createElement('canvas');
-    canvas.width = cfg.width;
-    canvas.height = cfg.height;
+    canvas.width = dims.width;
+    canvas.height = dims.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
     canvasRef.current = canvas;
     ctxRef.current = ctx;
     return canvas;
-  }, []);
+  }, [orientation]);
 
   // Draw a frame
   const drawFrame = useCallback((token: Token | null, wpm: number, progress: number) => {
     const canvas = canvasRef.current;
     const ctx = ctxRef.current;
     const cfg = configRef.current;
+    const context = contextRef.current;
     if (!canvas || !ctx) return;
+
+    const isPortrait = canvas.height > canvas.width;
+    const scale = isPortrait ? 0.8 : 1;
+    const fontSize = Math.round((isPortrait ? 56 : 72) * scale);
+    const smallFontSize = Math.round((isPortrait ? 18 : 24) * scale);
+    const tinyFontSize = Math.round((isPortrait ? 14 : 16) * scale);
 
     // Clear background
     ctx.fillStyle = cfg.backgroundColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw progress bar
-    const progressBarHeight = 8;
-    const progressBarY = canvas.height - 60;
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(100, progressBarY, canvas.width - 200, progressBarHeight);
-    ctx.fillStyle = '#646cff';
-    ctx.fillRect(100, progressBarY, (canvas.width - 200) * progress, progressBarHeight);
+    // Padding
+    const padding = isPortrait ? 40 : 60;
+    const contentWidth = canvas.width - padding * 2;
 
-    // Draw WPM
-    ctx.font = `bold 24px ${cfg.fontFamily}`;
-    ctx.fillStyle = '#646cff';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${wpm} WPM`, canvas.width / 2, progressBarY + 40);
+    // === TOP SECTION ===
+    // Draw watermark/logo
+    if (cfg.showWatermark) {
+      ctx.font = `bold ${smallFontSize}px ${cfg.fontFamily}`;
+      ctx.fillStyle = 'rgba(100, 108, 255, 0.8)';
+      ctx.textAlign = 'left';
+      ctx.fillText('UltraReader', padding, padding);
+    }
 
-    // Draw word
+    // Draw article title (if available)
+    if (context.articleTitle) {
+      ctx.font = `${tinyFontSize}px ${cfg.fontFamily}`;
+      ctx.fillStyle = '#a78bfa';
+      ctx.textAlign = 'center';
+      const titleY = isPortrait ? 100 : 60;
+      // Truncate title if too long
+      let title = context.articleTitle;
+      const maxWidth = contentWidth - 100;
+      while (ctx.measureText(title).width > maxWidth && title.length > 10) {
+        title = title.slice(0, -4) + '...';
+      }
+      ctx.fillText(title, canvas.width / 2, titleY);
+    }
+
+    // === CENTER SECTION - Main word display ===
+    const centerY = canvas.height / 2;
+    const centerX = canvas.width / 2;
+
     if (token) {
-      const centerY = canvas.height / 2;
-      const centerX = canvas.width / 2;
-
       if (token.type === 'punct') {
         // Draw punctuation centered
-        ctx.font = `bold ${cfg.fontSize}px ${cfg.fontFamily}`;
+        ctx.font = `bold ${fontSize}px ${cfg.fontFamily}`;
         ctx.fillStyle = '#888888';
         ctx.textAlign = 'center';
         ctx.fillText(token.value === '\n\n' ? '¶' : token.value, centerX, centerY);
       } else {
         // Draw word with ORP
         const { left, pivot, right } = splitByORP(token.value);
-        ctx.font = `bold ${cfg.fontSize}px ${cfg.fontFamily}`;
+        ctx.font = `bold ${fontSize}px ${cfg.fontFamily}`;
 
         // Measure text widths
         const leftWidth = ctx.measureText(left).width;
@@ -152,7 +187,7 @@ export function useCanvasRecorder(
         ctx.fillStyle = cfg.pivotColor;
         ctx.beginPath();
         const triangleX = pivotX + pivotWidth / 2;
-        const triangleY = centerY - cfg.fontSize - 10;
+        const triangleY = centerY - fontSize - 10;
         ctx.moveTo(triangleX, triangleY + 15);
         ctx.lineTo(triangleX - 8, triangleY);
         ctx.lineTo(triangleX + 8, triangleY);
@@ -161,27 +196,57 @@ export function useCanvasRecorder(
       }
     } else {
       // Draw "Ready to read"
-      ctx.font = `32px ${cfg.fontFamily}`;
+      ctx.font = `${Math.round(fontSize * 0.5)}px ${cfg.fontFamily}`;
       ctx.fillStyle = '#444444';
       ctx.textAlign = 'center';
-      ctx.fillText('Ready to read', canvas.width / 2, canvas.height / 2);
+      ctx.fillText('Ready to read', centerX, centerY);
     }
 
-    // Draw watermark
-    if (cfg.showWatermark) {
-      ctx.font = `bold 20px ${cfg.fontFamily}`;
-      ctx.fillStyle = 'rgba(100, 108, 255, 0.5)';
-      ctx.textAlign = 'right';
-      ctx.fillText('UltraReader', canvas.width - 30, 40);
+    // === BOTTOM SECTION - HUD ===
+    const bottomY = canvas.height - padding;
+    const hudY = bottomY - 60;
+
+    // Progress bar
+    const progressBarHeight = 8;
+    const progressBarY = hudY;
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(padding, progressBarY, contentWidth, progressBarHeight);
+    ctx.fillStyle = '#646cff';
+    ctx.fillRect(padding, progressBarY, contentWidth * progress, progressBarHeight);
+
+    // Stats row below progress bar
+    const statsY = progressBarY + 35;
+    ctx.font = `bold ${smallFontSize}px ${cfg.fontFamily}`;
+
+    // WPM (center)
+    ctx.fillStyle = '#646cff';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${wpm} WPM`, centerX, statsY);
+
+    // Word count (left)
+    if (context.totalTokens > 0) {
+      ctx.fillStyle = '#666666';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${context.currentIndex + 1} / ${context.totalTokens}`, padding, statsY);
     }
+
+    // Progress percentage (right)
+    ctx.fillStyle = '#666666';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(progress * 100)}%`, canvas.width - padding, statsY);
   }, []);
 
   // Start recording
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback((context?: Partial<RecordingContext>) => {
     // Check if MediaRecorder is supported
     if (typeof MediaRecorder === 'undefined') {
       console.error('MediaRecorder not supported in this browser');
       return;
+    }
+
+    // Update context
+    if (context) {
+      contextRef.current = { ...contextRef.current, ...context };
     }
 
     const canvas = initCanvas();
@@ -200,7 +265,7 @@ export function useCanvasRecorder(
       console.error('No supported video format found');
       return;
     }
-    console.log('Recording with mime type:', mimeType);
+    console.log('Recording with mime type:', mimeType, 'orientation:', orientation);
 
     const mediaRecorder = new MediaRecorder(stream, {
       mimeType,
@@ -216,11 +281,22 @@ export function useCanvasRecorder(
     mediaRecorderRef.current = mediaRecorder;
     mediaRecorder.start(100); // Collect data every 100ms
     setIsRecording(true);
-  }, [initCanvas]);
+  }, [initCanvas, orientation]);
 
   // Record a frame
-  const recordFrame = useCallback((token: Token | null, wpm: number, progress: number) => {
+  const recordFrame = useCallback((
+    token: Token | null,
+    wpm: number,
+    progress: number,
+    context?: Partial<RecordingContext>
+  ) => {
     if (!isRecording) return;
+
+    // Update context if provided
+    if (context) {
+      contextRef.current = { ...contextRef.current, ...context };
+    }
+
     drawFrame(token, wpm, progress);
   }, [isRecording, drawFrame]);
 
@@ -257,12 +333,15 @@ export function useCanvasRecorder(
     setRecordedBlob(null);
     setRecordedMimeType(null);
     chunksRef.current = [];
+    contextRef.current = { currentIndex: 0, totalTokens: 0 };
   }, []);
 
   return {
     isRecording,
     recordedBlob,
     recordedMimeType,
+    orientation,
+    setOrientation,
     startRecording,
     stopRecording,
     recordFrame,

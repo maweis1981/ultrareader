@@ -156,6 +156,31 @@ kbd {
   margin-top: 20px;
 }
 
+.record-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orientation-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  font-size: 14px;
+  background: #1a1a1a;
+  color: #888;
+  border: 1px solid #333;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.orientation-btn:hover {
+  color: #fff;
+  border-color: #646cff;
+}
+
 .record-btn {
   display: flex;
   align-items: center;
