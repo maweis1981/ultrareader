@@ -3,6 +3,7 @@ import type { Article } from '../../data/articles';
 import { DIFFICULTY_LABELS } from '../../data/articles';
 import { getRank, formatTime } from '../../data/stats';
 import type { UserStats } from '../../data/stats';
+import { convertWebMToMP4, loadFFmpeg } from '../../utils/videoConverter';
 import './styles.css';
 
 interface CompletionScreenProps {
@@ -74,6 +75,11 @@ export function CompletionScreen({
 }: CompletionScreenProps) {
   const [showConfetti, setShowConfetti] = useState(true);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [mp4Blob, setMp4Blob] = useState<Blob | null>(null);
+  const [mp4Url, setMp4Url] = useState<string | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
+  const [convertProgress, setConvertProgress] = useState(0);
+  const [conversionStatus, setConversionStatus] = useState<'idle' | 'loading' | 'converting' | 'done' | 'error'>('idle');
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const encouragement = ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)];
@@ -89,7 +95,7 @@ export function CompletionScreen({
   }, []);
 
   useEffect(() => {
-    // Create video URL from blob
+    // Create video URL from blob (WebM for preview)
     if (recordedBlob) {
       const url = URL.createObjectURL(recordedBlob);
       setVideoUrl(url);
@@ -97,23 +103,75 @@ export function CompletionScreen({
     }
   }, [recordedBlob]);
 
+  // Clean up MP4 URL
+  useEffect(() => {
+    return () => {
+      if (mp4Url) {
+        URL.revokeObjectURL(mp4Url);
+      }
+    };
+  }, [mp4Url]);
+
+  // Convert to MP4 when there's a recorded blob
+  const handleConvertToMP4 = async () => {
+    if (!recordedBlob || isConverting) return;
+
+    setIsConverting(true);
+    setConversionStatus('loading');
+    setConvertProgress(0);
+
+    try {
+      // Load FFmpeg first
+      await loadFFmpeg((progress) => {
+        setConvertProgress(progress * 0.3); // 0-30% for loading
+      });
+
+      setConversionStatus('converting');
+
+      // Convert video
+      const mp4 = await convertWebMToMP4(recordedBlob, (progress) => {
+        setConvertProgress(0.3 + progress * 0.7); // 30-100% for converting
+      });
+
+      setMp4Blob(mp4);
+      const url = URL.createObjectURL(mp4);
+      setMp4Url(url);
+      setConversionStatus('done');
+    } catch (err) {
+      console.error('Conversion failed:', err);
+      setConversionStatus('error');
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
   const handleDownloadVideo = () => {
-    if (!videoUrl || !recordedBlob) return;
+    // Prefer MP4 if available, otherwise WebM
+    const blob = mp4Blob || recordedBlob;
+    const url = mp4Url || videoUrl;
+    const ext = mp4Blob ? 'mp4' : 'webm';
+
+    if (!url || !blob) return;
 
     const a = document.createElement('a');
-    a.href = videoUrl;
-    a.download = `ultrareader-${article?.title || 'reading'}-${Date.now()}.webm`;
+    a.href = url;
+    a.download = `ultrareader-${article?.title || 'reading'}-${Date.now()}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
   };
 
   const handleShareVideo = async () => {
-    if (!recordedBlob) return;
+    // Prefer MP4 for sharing (better compatibility)
+    const blob = mp4Blob || recordedBlob;
+    const mimeType = mp4Blob ? 'video/mp4' : 'video/webm';
+    const ext = mp4Blob ? 'mp4' : 'webm';
+
+    if (!blob) return;
 
     // Check if Web Share API is available
     if (navigator.share && navigator.canShare) {
-      const file = new File([recordedBlob], 'ultrareader-reading.webm', { type: 'video/webm' });
+      const file = new File([blob], `ultrareader-reading.${ext}`, { type: mimeType });
 
       if (navigator.canShare({ files: [file] })) {
         try {
@@ -131,6 +189,21 @@ export function CompletionScreen({
 
     // Fallback to download
     handleDownloadVideo();
+  };
+
+  const getConversionButtonText = () => {
+    switch (conversionStatus) {
+      case 'loading':
+        return `Loading converter... ${Math.round(convertProgress * 100)}%`;
+      case 'converting':
+        return `Converting... ${Math.round(convertProgress * 100)}%`;
+      case 'done':
+        return 'MP4 Ready!';
+      case 'error':
+        return 'Conversion failed';
+      default:
+        return 'Convert to MP4';
+    }
   };
 
   return (
@@ -183,24 +256,53 @@ export function CompletionScreen({
             <video
               ref={videoRef}
               className="video-preview"
-              src={videoUrl}
+              src={mp4Url || videoUrl}
               controls
               playsInline
             />
           )}
 
+          {/* Conversion Progress */}
+          {isConverting && (
+            <div className="conversion-progress">
+              <div className="conversion-progress-bar">
+                <div
+                  className="conversion-progress-fill"
+                  style={{ width: `${convertProgress * 100}%` }}
+                />
+              </div>
+              <span className="conversion-progress-text">
+                {conversionStatus === 'loading' ? 'Loading FFmpeg...' : 'Converting to MP4...'}
+              </span>
+            </div>
+          )}
+
           <div className="completion-actions">
+            {/* Convert to MP4 button */}
+            {recordedBlob && conversionStatus !== 'done' && (
+              <button
+                className={`completion-btn convert ${conversionStatus === 'error' ? 'error' : ''}`}
+                onClick={handleConvertToMP4}
+                disabled={isConverting}
+              >
+                <span className="btn-icon">
+                  {isConverting ? '⏳' : conversionStatus === 'error' ? '❌' : '🎬'}
+                </span>
+                {getConversionButtonText()}
+              </button>
+            )}
+
             {recordedBlob && (
               <button className="completion-btn share" onClick={handleShareVideo}>
                 <span className="btn-icon">📤</span>
-                Share Video
+                Share Video {mp4Blob ? '(MP4)' : '(WebM)'}
               </button>
             )}
 
             {recordedBlob && (
               <button className="completion-btn secondary" onClick={handleDownloadVideo}>
                 <span className="btn-icon">💾</span>
-                Download Video
+                Download {mp4Blob ? 'MP4' : 'WebM'}
               </button>
             )}
 
