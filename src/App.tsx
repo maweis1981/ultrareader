@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRSVPPlayer } from './hooks/useRSVPPlayer';
-import { useScreenRecorder } from './hooks/useScreenRecorder';
+import { useCanvasRecorder } from './hooks/useCanvasRecorder';
 import { RSVPDisplay } from './components/RSVPDisplay';
 import { TextInput } from './components/TextInput';
 import { Controls } from './components/Controls';
@@ -41,8 +41,9 @@ function App() {
     recordedBlob,
     startRecording,
     stopRecording,
+    recordFrame,
     clearRecording,
-  } = useScreenRecorder();
+  } = useCanvasRecorder();
 
   const [view, setView] = useState<AppView>('home');
   const [currentArticle, setCurrentArticle] = useState<Article | null>(null);
@@ -70,8 +71,16 @@ function App() {
     }
   }, [status]);
 
+  // Record frame when token changes (during recording)
+  useEffect(() => {
+    if (isRecording && status === 'playing') {
+      const currentWpm = progressiveMode.enabled ? effectiveWpm : wpm;
+      recordFrame(currentToken, currentWpm, progress);
+    }
+  }, [isRecording, status, currentToken, wpm, effectiveWpm, progressiveMode.enabled, progress, recordFrame]);
+
   // Record reading when finished
-  const handleReadingComplete = useCallback(() => {
+  const handleReadingComplete = useCallback(async () => {
     if (startTimeRef.current > 0 && wordCountRef.current > 0) {
       const readTime = Math.round((Date.now() - startTimeRef.current) / 1000);
       const finalWpm = progressiveMode.enabled ? effectiveWpm : wpm;
@@ -95,7 +104,7 @@ function App() {
 
       // Stop recording if active
       if (isRecording) {
-        stopRecording();
+        await stopRecording();
       }
 
       // Show completion screen
@@ -135,13 +144,13 @@ function App() {
   };
 
   // Handle back to home
-  const handleBackToHome = useCallback(() => {
+  const handleBackToHome = useCallback(async () => {
     if (status === 'playing' || status === 'paused') {
       // Don't show completion screen when manually going back
       startTimeRef.current = 0;
     }
     if (isRecording) {
-      stopRecording();
+      await stopRecording();
     }
     reset();
     setCurrentArticle(null);
@@ -167,9 +176,14 @@ function App() {
     setView('home');
   }, [reset, clearRecording]);
 
-  // Handle start recording
-  const handleStartRecording = async () => {
-    await startRecording();
+  // Handle start recording - now just starts, no permission needed
+  const handleStartRecording = () => {
+    startRecording();
+  };
+
+  // Handle stop recording
+  const handleStopRecording = async () => {
+    await stopRecording();
   };
 
   // 键盘快捷键
@@ -328,7 +342,7 @@ function App() {
                 </button>
               )}
               {isRecording && (
-                <button className="record-btn recording" onClick={stopRecording}>
+                <button className="record-btn recording" onClick={handleStopRecording}>
                   <span className="btn-icon">⏹</span>
                   Stop Recording
                 </button>
